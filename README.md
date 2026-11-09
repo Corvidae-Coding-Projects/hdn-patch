@@ -15,20 +15,21 @@ ABI-compatible with grsecurity or PaX.
 | Upstream version | Linux 7.0.12 |
 | Upstream stable commit | `f53879e2e1e2fa053040e734c1ef8f386109a61b` |
 | Upstream archive SHA-256 | `57edc9a41efc1ca6b797afa8f4a587a30da2af6bca7356eb56e1e1a4ada265da` |
-| HDN source commit | `03ce03eb285654673591b7fc50c03479214ffa3e` |
+| HDN source commit | `c2f47ae442eb8669acd93cc9d6e5f606a10a1b35` |
 | Patch | `hdn-linux-7.0.12.patch` |
-| Patch SHA-256 | `2cca9b4efbdfcb781f6795880b9fa52ccd9ac2de4ab9fd3c167989fa6969a955` |
-| Patch size | 4,871,195 bytes; 147,863 lines |
+| Patch SHA-256 | `311b4f013a5979d8e37f285a58f99d5edb2eb07d7e98a4de30b7dbc9efccbf5f` |
+| Patch size | 4,896,236 bytes; 148,739 lines |
 
 The source commit is public at:
 
-https://github.com/Corvidae-Coding-Projects/hdn-kernel/commit/03ce03eb285654673591b7fc50c03479214ffa3e
+https://github.com/Corvidae-Coding-Projects/hdn-kernel/commit/c2f47ae442eb8669acd93cc9d6e5f606a10a1b35
 
 This checkpoint is newer than the separately qualified HDN release-30 kernel
 package and OS image. Their test results must not be treated as qualification
-of this newer patch. Focused compilation and static-analysis checks have
-passed; broader hardware, sanitizer, adversarial, performance, and final
-acceptance work remains separate.
+of this newer patch. Its fresh x86 KVM run passed all 1,118 hardening smoke
+checks, and the affected tools passed focused compilation and static analysis.
+Broader hardware, sanitizer, adversarial, performance, and final acceptance
+work remains separate.
 
 ## Obtain and verify Linux 7.0.12
 

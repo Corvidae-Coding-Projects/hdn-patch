@@ -39789,7 +39789,18 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  	default:
  		return -ENOIOCTLCMD;
  	}
-@@ -1371,12 +1390,15 @@
+@@ -1215,6 +1234,10 @@
+ #ifdef CONFIG_64BIT
+ 		[ilog2(VM_SEALED)] = "sl",
+ #endif
++#if defined(CONFIG_SECURITY_HARDENING_USER_WX) && defined(CONFIG_64BIT)
++		/* Internal write-history state; it is not a userspace VMA property. */
++		[ilog2(VM_HDN_WAS_WRITABLE)] = "",
++#endif
+ 	};
+ 	size_t i;
+ 
+@@ -1371,12 +1394,15 @@
  {
  	struct vm_area_struct *vma = v;
  	struct mem_size_stats mss = {};
@@ -39808,7 +39819,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  	SEQ_PUT_DEC(" kB\nKernelPageSize: ", vma_kernel_pagesize(vma));
  	SEQ_PUT_DEC(" kB\nMMUPageSize:    ", vma_mmu_pagesize(vma));
  	seq_puts(m, " kB\n");
-@@ -1423,10 +1445,12 @@
+@@ -1423,10 +1449,12 @@
  	if (unlikely(!vma))
  		goto empty_set;
  
@@ -39824,7 +39835,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  
  		/*
  		 * Release mmap_lock temporarily if someone wants to
-@@ -1484,15 +1508,20 @@
+@@ -1484,15 +1512,20 @@
  
  			/* Case 1 and 2 above */
  			if (vma->vm_start >= last_vma_end) {
@@ -39849,7 +39860,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  			}
  		}
  	} for_each_vma(vmi, vma);
-@@ -1550,6 +1579,14 @@
+@@ -1550,6 +1583,14 @@
  		single_release(inode, file);
  		goto out_free;
  	}
@@ -39864,7 +39875,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  
  	return 0;
  
-@@ -2225,6 +2262,10 @@
+@@ -2225,6 +2266,10 @@
  	if (!mm || !mmget_not_zero(mm))
  		goto out;
  
@@ -39875,7 +39886,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  	ret = -EINVAL;
  	/* file position must be aligned */
  	if ((*ppos % PM_ENTRY_BYTES) || (count % PM_ENTRY_BYTES))
-@@ -3095,6 +3136,11 @@
+@@ -3095,6 +3140,11 @@
  			   unsigned long arg)
  {
  	struct mm_struct *mm = file->private_data;
@@ -39887,7 +39898,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  
  	switch (cmd) {
  	case PAGEMAP_SCAN:
-@@ -3321,7 +3367,8 @@
+@@ -3321,7 +3371,8 @@
  		mpol_to_str(buffer, sizeof(buffer), proc_priv->task_mempolicy);
  	}
  
@@ -39897,7 +39908,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  
  	if (file) {
  		seq_puts(m, " file=");
-@@ -3336,7 +3383,8 @@
+@@ -3336,7 +3387,8 @@
  		seq_puts(m, " huge");
  
  	/* mmap_lock is held by m_start */
@@ -43408,7 +43419,50 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  #include <linux/bug.h>
  #include <linux/list.h>
  #include <linux/mmzone.h>
-@@ -3401,7 +3402,11 @@
+@@ -356,6 +357,7 @@
+ #endif
+ 	DECLARE_VMA_BIT(UFFD_MINOR, 41),
+ 	DECLARE_VMA_BIT(SEALED, 42),
++	DECLARE_VMA_BIT(HDN_WAS_WRITABLE, 43),
+ 	/* Flags that reuse flags above. */
+ 	DECLARE_VMA_BIT_ALIAS(PKEY_BIT0, HIGH_ARCH_0),
+ 	DECLARE_VMA_BIT_ALIAS(PKEY_BIT1, HIGH_ARCH_1),
+@@ -504,6 +506,11 @@
+ #define VM_ALLOW_ANY_UNCACHED	VM_NONE
+ #define VM_SEALED		VM_NONE
+ #endif
++#if defined(CONFIG_SECURITY_HARDENING_USER_WX) && defined(CONFIG_64BIT)
++#define VM_HDN_WAS_WRITABLE	INIT_VM_FLAG(HDN_WAS_WRITABLE)
++#else
++#define VM_HDN_WAS_WRITABLE	VM_NONE
++#endif
+ #if defined(CONFIG_64BIT) || defined(CONFIG_PPC32)
+ #define VM_DROPPABLE		INIT_VM_FLAG(DROPPABLE)
+ #else
+@@ -597,8 +604,12 @@
+  *                  mapped page tables may contain metadata not described by the
+  *                  VMA and thus any merged VMA may also contain this metadata,
+  *                  and thus we must make this flag sticky.
++ *
++ * VM_HDN_WAS_WRITABLE - A merged VMA must retain write history from every
++ *                       contributing range so removing VM_WRITE cannot erase
++ *                       the exec-after-write policy state.
+  */
+-#define VM_STICKY (VM_SOFTDIRTY | VM_MAYBE_GUARD)
++#define VM_STICKY (VM_SOFTDIRTY | VM_MAYBE_GUARD | VM_HDN_WAS_WRITABLE)
+ 
+ /*
+  * VMA flags we ignore for the purposes of merge, i.e. one VMA possessing one
+@@ -920,6 +931,8 @@
+ 				 vm_flags_t flags)
+ {
+ 	VM_WARN_ON_ONCE(!pgtable_supports_soft_dirty() && (flags & VM_SOFTDIRTY));
++	if (flags & VM_WRITE)
++		flags |= VM_HDN_WAS_WRITABLE;
+ 	vma_flags_clear_all(&vma->flags);
+ 	vma_flags_overwrite_word(&vma->flags, flags);
+ }
+@@ -3401,7 +3414,11 @@
   */
  static inline struct ptdesc *pagetable_alloc_noprof(gfp_t gfp, unsigned int order)
  {
@@ -43420,7 +43474,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  
  	return page_ptdesc(page);
  }
-@@ -3411,6 +3416,8 @@
+@@ -3411,6 +3428,8 @@
  {
  	struct page *page = ptdesc_page(pt);
  
@@ -43429,7 +43483,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  	__free_pages(page, compound_order(page));
  }
  
-@@ -3913,8 +3920,13 @@
+@@ -3913,8 +3932,13 @@
  	unsigned long align_mask;
  	unsigned long align_offset;
  	unsigned long start_gap;
@@ -43812,6 +43866,31 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
  );
  
  TRACE_EVENT(exit_mmap,
+diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/include/trace/events/mmflags.h linux-7.0.12-hdn/include/trace/events/mmflags.h
+--- linux-7.0.12/include/trace/events/mmflags.h	2026-06-09 05:32:51.000000000 -0500
++++ linux-7.0.12-hdn/include/trace/events/mmflags.h	2026-11-08 22:47:51.000000000 -0600
+@@ -200,6 +200,12 @@
+ # define IF_HAVE_VM_DROPPABLE(flag, name)
+ #endif
+ 
++#ifdef CONFIG_SECURITY_HARDENING_USER_WX
++# define IF_HAVE_VM_HDN_WAS_WRITABLE(flag, name) {flag, name},
++#else
++# define IF_HAVE_VM_HDN_WAS_WRITABLE(flag, name)
++#endif
++
+ #define __def_vmaflag_names						\
+ 	{VM_READ,			"read"		},		\
+ 	{VM_WRITE,			"write"		},		\
+@@ -234,6 +240,8 @@
+ 	{VM_HUGEPAGE,			"hugepage"	},		\
+ 	{VM_NOHUGEPAGE,			"nohugepage"	},		\
+ IF_HAVE_VM_DROPPABLE(VM_DROPPABLE,	"droppable"	)		\
++	IF_HAVE_VM_HDN_WAS_WRITABLE(VM_HDN_WAS_WRITABLE,		\
++				       "hdn_was_writable")		\
+ 	{VM_MERGEABLE,			"mergeable"	}		\
+ 
+ #define show_vma_flags(flags)						\
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/include/uapi/linux/hardening.h linux-7.0.12-hdn/include/uapi/linux/hardening.h
 --- linux-7.0.12/include/uapi/linux/hardening.h	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/include/uapi/linux/hardening.h	2026-07-15 15:05:14.989871342 -0500
@@ -57519,7 +57598,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/scripts/gcc-plugins/hdn_null_analysis_plugin.c linux-7.0.12-hdn/scripts/gcc-plugins/hdn_null_analysis_plugin.c
 --- linux-7.0.12/scripts/gcc-plugins/hdn_null_analysis_plugin.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/scripts/gcc-plugins/hdn_null_analysis_plugin.c	2026-11-06 08:08:58.000000000 -0600
-@@ -0,0 +1,1005 @@
+@@ -0,0 +1,1007 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * HDN optimized null-dereference reporting pass.
@@ -58169,6 +58248,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	const char *probe_invalidation;
 +	basic_block entry_successor;
 +	bool must_execute;
++	char esc_profile[sizeof(analysis_profile) * 2];
 +	char esc_file[HDN_NULL_PATH_MAX];
 +	char esc_function[1024];
 +	char esc_callee[1024];
@@ -58222,6 +58302,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	hash = fnv1a_update(hash, position);
 +	snprintf(id, sizeof(id), "HDN-NULL-v1-%016" PRIx64, hash);
 +
++	json_escape(esc_profile, sizeof(esc_profile), analysis_profile);
 +	json_escape(esc_file, sizeof(esc_file), file);
 +	json_escape(esc_function, sizeof(esc_function), function);
 +	json_escape(esc_callee, sizeof(esc_callee),
@@ -58240,7 +58321,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +		"\"range\":\"%s\",\"path_scope\":\"%s\",\"origin\":\"%s\","
 +		"\"probe_owner\":\"%s\",\"probe_invalidation\":\"%s\"}\n",
 +		HDN_NULL_SCHEMA_VERSION, HDN_NULL_ANALYZER_VERSION, id,
-+		analysis_profile, category, kind, esc_file, LOCATION_LINE(loc),
++		esc_profile, category, kind, esc_file, LOCATION_LINE(loc),
 +		LOCATION_COLUMN(loc), esc_function, taint, state_name(state),
 +		must_execute ? "must_execute" : "conditional",
 +		esc_callee, esc_probe_owner, esc_probe_invalidation);
@@ -60969,7 +61050,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/security/hardening/Kconfig linux-7.0.12-hdn/security/hardening/Kconfig
 --- linux-7.0.12/security/hardening/Kconfig	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/security/hardening/Kconfig	2026-07-15 17:50:28.129953211 -0500
-@@ -0,0 +1,1166 @@
+@@ -0,0 +1,1168 @@
 +# SPDX-License-Identifier: GPL-2.0-only
 +menuconfig SECURITY_HARDENING
 +	bool "Hardening contract layer"
@@ -61477,10 +61558,12 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +config SECURITY_HARDENING_USER_WX
 +	bool "Deny writable executable userspace mappings"
 +	default y
++	depends on 64BIT
 +	help
 +	  Deny mmap() and mprotect() transitions that create writable and
 +	  executable userspace mappings. Also deny adding execute permission to
-+	  a mapping that is currently writable.
++	  a mapping that has been writable at any point in its lifetime, including
++	  after VMA splits, merges, and forks.
 +	  Profiles can grant a narrow JIT exception for private anonymous
 +	  write-to-execute transitions without allowing simultaneous W+X.
 +	  This option provides the default no-ambient-WX baseline.
@@ -62931,7 +63014,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/security/hardening/core.c linux-7.0.12-hdn/security/hardening/core.c
 --- linux-7.0.12/security/hardening/core.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/security/hardening/core.c	2026-07-15 17:50:28.121953225 -0500
-@@ -0,0 +1,9384 @@
+@@ -0,0 +1,9387 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#include <linux/binfmts.h>
@@ -67350,6 +67433,8 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	adds_read = !(req->oldflags & VM_READ) && (req->newflags & VM_READ);
 +	adds_exec = !(req->oldflags & VM_EXEC) && (req->newflags & VM_EXEC);
 +	adds_write = !(req->oldflags & VM_WRITE) && (req->newflags & VM_WRITE);
++	if (req->newflags & VM_WRITE)
++		req->newflags |= VM_HDN_WAS_WRITABLE;
 +	removes_write = (req->oldflags & VM_WRITE) &&
 +			!(req->newflags & VM_WRITE);
 +	if (adds_read && req->vma && req->vma->vm_file) {
@@ -67424,7 +67509,8 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +				       HDN_REASON_TEXTREL_MPROTECT,
 +				       -EACCES, hdn_vma_object_id(req->vma));
 +
-+	if (adds_exec && (req->oldflags & VM_WRITE) &&
++	if (adds_exec &&
++	    (req->oldflags & (VM_WRITE | VM_HDN_WAS_WRITABLE)) &&
 +	    !hdn_memory_allows(HDN_MEM_ALLOW_EXEC_AFTER_WRITE) &&
 +	    !hdn_jit_mprotect_allows(req) &&
 +	    !(textrel_allowed && textrel_mprotect)) {
@@ -76002,7 +76088,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/tools/hardening/README.rst linux-7.0.12-hdn/tools/hardening/README.rst
 --- linux-7.0.12/tools/hardening/README.rst	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/tools/hardening/README.rst	2026-07-15 16:15:30.669029711 -0500
-@@ -0,0 +1,1879 @@
+@@ -0,0 +1,1894 @@
 +.. SPDX-License-Identifier: GPL-2.0-only
 +
 +Linux Hardening Policy Tools
@@ -76031,7 +76117,15 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +a product read-only mount, running one worker command, and resealing the mount
 +read-only before returning. Read-only resealing retries bounded transient
 +``EBUSY`` failures after syncing, while still returning failure if a writer
-+does not release the protected filesystem.
++does not release the protected filesystem. The helper blocks ordinary
++termination signals while the writable window is open, stops and reaps the
++complete worker process group on cancellation or direct-worker completion,
++acts as a child subreaper so orphaned group members remain under guardian
++control even across HDN profile transitions, and restores signal delivery
++only after the mount has been resealed. If a
++superblock-level read-only state requires the legacy remount fallback, the
++helper preserves the mount's existing ``nosuid``, ``nodev``, ``noexec``, and
++other observable VFS restrictions and verifies the requested final state.
 +
 +``hdn-package-worker`` composes that primitive across the fixed boot paths used
 +by system updates. After the broker opens ``/usr``, the worker inspects
@@ -77520,7 +77614,14 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +``hdn-rofs-transaction`` runs under a
 +``MOUNT_ADMIN`` + ``ROFS_RELAX`` profile, temporarily remounts the product path
 +writable, runs the worker command, reseals the mount read-only, and leaves a
-+post-transaction write-open failing with ``EROFS``. It also proves the brokered
++post-transaction write-open failing with ``EROFS``. Cancellation is checked by
++terminating the guardian while its worker is live and requiring the worker to
++stop before the mount becomes read-only again. Normal completion is also
++checked with a worker that tries to leave a background descendant behind; the
++guardian adopts, stops, and reaps that process group before resealing. A
++restricted read-only mount forces the legacy remount path and verifies that
++``nosuid``, ``nodev``,
++and ``noexec`` survive both the writable window and reseal. It also proves the brokered
 +path: ``hdn-admin-broker`` enters a product admin profile, accepts the typed
 +``rofs-transaction`` intent only when the mountpoint and worker are listed in
 +the broker allowlist, execs the transaction helper, and leaves the same
@@ -78002,7 +78103,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/tools/hardening/hdn-admin-broker.c linux-7.0.12-hdn/tools/hardening/hdn-admin-broker.c
 --- linux-7.0.12/tools/hardening/hdn-admin-broker.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/tools/hardening/hdn-admin-broker.c	2026-07-15 13:50:37.436497090 -0500
-@@ -0,0 +1,964 @@
+@@ -0,0 +1,967 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#define _GNU_SOURCE
@@ -78596,6 +78697,8 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +
 +static int exec_intent(const char *intent, char *const argv[], bool dry_run)
 +{
++	int exec_errno;
++
 +	if (dry_run) {
 +		printf("hdn-admin-broker: intent=%s\n", intent);
 +		printf("hdn-admin-broker: exec");
@@ -78604,9 +78707,10 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	}
 +
 +	execv(argv[0], argv);
++	exec_errno = errno;
 +	fprintf(stderr, "hdn-admin-broker: exec %s failed: %s\n", argv[0],
-+		strerror(errno));
-+	return errno == ENOENT ? 127 : 126;
++		strerror(exec_errno));
++	return exec_errno == ENOENT ? 127 : 126;
 +}
 +
 +static int run_rofs_apply(const char *intent, int argc, char **argv,
@@ -78970,7 +79074,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/tools/hardening/hdn-approval-token.c linux-7.0.12-hdn/tools/hardening/hdn-approval-token.c
 --- linux-7.0.12/tools/hardening/hdn-approval-token.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/tools/hardening/hdn-approval-token.c	2026-07-15 13:50:37.436497090 -0500
-@@ -0,0 +1,461 @@
+@@ -0,0 +1,458 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#define _GNU_SOURCE
@@ -79363,11 +79467,9 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	}
 +
 +	if (close(fd)) {
-+		fd = -1;
 +		ret = 1;
 +		goto out_unlink_name;
 +	}
-+	fd = -1;
 +
 +	printf("%s\n", path);
 +	ret = 0;
@@ -79376,7 +79478,6 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +out_unlink:
 +	if (fd >= 0)
 +		close(fd);
-+	fd = -1;
 +out_unlink_name:
 +	unlinkat(dirfd, name, 0);
 +out_dir:
@@ -85562,7 +85663,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/tools/hardening/hdn-policy-merge.c linux-7.0.12-hdn/tools/hardening/hdn-policy-merge.c
 --- linux-7.0.12/tools/hardening/hdn-policy-merge.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/tools/hardening/hdn-policy-merge.c	2026-07-15 13:50:37.436497090 -0500
-@@ -0,0 +1,636 @@
+@@ -0,0 +1,638 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#define _GNU_SOURCE
@@ -86113,6 +86214,8 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +			return -EIO;
 +		}
 +		last = (unsigned char)buf[len - 1];
++		if (len < sizeof(buf))
++			break;
 +	}
 +
 +	if (ferror(in)) {
@@ -89920,7 +90023,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/tools/hardening/hdn-prompt-dispatch.c linux-7.0.12-hdn/tools/hardening/hdn-prompt-dispatch.c
 --- linux-7.0.12/tools/hardening/hdn-prompt-dispatch.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/tools/hardening/hdn-prompt-dispatch.c	2026-07-15 13:50:37.436497090 -0500
-@@ -0,0 +1,724 @@
+@@ -0,0 +1,727 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#define _GNU_SOURCE
@@ -90484,6 +90587,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	char **argv;
 +	unsigned int argc = 0;
 +	unsigned int i;
++	int exec_errno;
 +
 +	argv = calloc((size_t)rule->argc + 6, sizeof(*argv));
 +	if (!argv) {
@@ -90517,10 +90621,11 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +
 +		if (!child) {
 +			execv(broker, argv);
++			exec_errno = errno;
 +			fprintf(stderr,
 +				"hdn-prompt-dispatch: exec %s failed: %s\n",
-+				broker, strerror(errno));
-+			_exit(errno == ENOENT ? 127 : 126);
++				broker, strerror(exec_errno));
++			_exit(exec_errno == ENOENT ? 127 : 126);
 +		}
 +
 +		ret = child_status_result(child);
@@ -90535,12 +90640,13 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +		return ret;
 +	}
 +
-+	execv(broker, argv);
++		execv(broker, argv);
++	exec_errno = errno;
 +	fprintf(stderr, "hdn-prompt-dispatch: exec %s failed: %s\n",
-+		broker, strerror(errno));
++		broker, strerror(exec_errno));
 +	free(argv);
 +	unlink(token);
-+	return errno == ENOENT ? 127 : 126;
++	return exec_errno == ENOENT ? 127 : 126;
 +}
 +
 +int main(int argc, char **argv)
@@ -95878,7 +95984,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/tools/hardening/hdn-rofs-transaction.c linux-7.0.12-hdn/tools/hardening/hdn-rofs-transaction.c
 --- linux-7.0.12/tools/hardening/hdn-rofs-transaction.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/tools/hardening/hdn-rofs-transaction.c	2026-07-15 14:22:07.965697193 -0500
-@@ -0,0 +1,157 @@
+@@ -0,0 +1,490 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#define _GNU_SOURCE
@@ -95886,11 +95992,13 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +#include <errno.h>
 +#include <fcntl.h>
 +#include <linux/mount.h>
++#include <signal.h>
 +#include <stdbool.h>
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
 +#include <sys/mount.h>
++#include <sys/prctl.h>
 +#include <sys/statvfs.h>
 +#include <sys/syscall.h>
 +#include <sys/wait.h>
@@ -95899,6 +96007,68 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +
 +#define HDN_SEAL_RETRIES 20
 +#define HDN_SEAL_RETRY_NS 250000000L
++#define HDN_CANCEL_POLL_NS 50000000L
++#define HDN_CANCEL_GRACE_POLLS 40
++
++static unsigned long legacy_remount_flags(const struct statvfs *state,
++					  bool readonly)
++{
++	unsigned long flags = MS_REMOUNT;
++
++	if (readonly)
++		flags |= MS_RDONLY;
++#ifdef ST_NOSUID
++	if (state->f_flag & ST_NOSUID)
++		flags |= MS_NOSUID;
++#endif
++#ifdef ST_NODEV
++	if (state->f_flag & ST_NODEV)
++		flags |= MS_NODEV;
++#endif
++#ifdef ST_NOEXEC
++	if (state->f_flag & ST_NOEXEC)
++		flags |= MS_NOEXEC;
++#endif
++#ifdef ST_SYNCHRONOUS
++	if (state->f_flag & ST_SYNCHRONOUS)
++		flags |= MS_SYNCHRONOUS;
++#endif
++#ifdef ST_MANDLOCK
++	if (state->f_flag & ST_MANDLOCK)
++		flags |= MS_MANDLOCK;
++#endif
++#ifdef ST_NOATIME
++	if (state->f_flag & ST_NOATIME)
++		flags |= MS_NOATIME;
++#endif
++#ifdef ST_NODIRATIME
++	if (state->f_flag & ST_NODIRATIME)
++		flags |= MS_NODIRATIME;
++#endif
++#ifdef ST_RELATIME
++	if (state->f_flag & ST_RELATIME)
++		flags |= MS_RELATIME;
++#endif
++#ifdef ST_NOSYMFOLLOW
++	if (state->f_flag & ST_NOSYMFOLLOW)
++		flags |= MS_NOSYMFOLLOW;
++#endif
++
++	return flags;
++}
++
++static int read_mount_state(const char *path, struct statvfs *state)
++{
++	if (!statvfs(path, state))
++		return 0;
++
++	return -errno;
++}
++
++static bool mount_state_matches(const struct statvfs *state, bool readonly)
++{
++	return !!(state->f_flag & ST_RDONLY) == readonly;
++}
 +
 +static void usage(const char *prog)
 +{
@@ -95907,7 +96077,9 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +
 +static int remount_state_once(const char *path, bool readonly)
 +{
-+	unsigned long flags = MS_REMOUNT;
++	struct statvfs state;
++	unsigned long flags;
++	int ret;
 +
 +#ifdef __NR_mount_setattr
 +	struct mount_attr attr = {
@@ -95917,25 +96089,36 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +
 +	if (!syscall(__NR_mount_setattr, AT_FDCWD, path, 0, &attr,
 +		     sizeof(attr))) {
-+		struct statvfs state;
-+
-+		if (readonly || statvfs(path, &state) ||
-+		    !(state.f_flag & ST_RDONLY))
++		ret = read_mount_state(path, &state);
++		if (ret)
++			return ret;
++		if (mount_state_matches(&state, readonly))
 +			return 0;
-+		/* A legacy remount may also have set the superblock read-only. */
++		/* The superblock can remain read-only after clearing the mount bit. */
 +	} else if (errno != ENOSYS && errno != EINVAL &&
 +		   errno != EOPNOTSUPP) {
 +		return -errno;
++	} else {
++		ret = read_mount_state(path, &state);
++		if (ret)
++			return ret;
 +	}
++#else
++	ret = read_mount_state(path, &state);
++	if (ret)
++		return ret;
 +#endif
 +
-+	if (readonly)
-+		flags |= MS_RDONLY;
++	flags = legacy_remount_flags(&state, readonly);
++	if (mount(NULL, path, NULL, flags, NULL))
++		return -errno;
++	ret = read_mount_state(path, &state);
++	if (ret)
++		return ret;
++	if (!mount_state_matches(&state, readonly))
++		return readonly ? -EIO : -EROFS;
 +
-+	if (!mount(NULL, path, NULL, flags, NULL))
-+		return 0;
-+
-+	return -errno;
++	return 0;
 +}
 +
 +static int remount_state(const char *path, bool readonly)
@@ -95965,9 +96148,168 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	return ret;
 +}
 +
-+static int run_command(char **argv)
++static int status_code(int status)
++{
++	if (WIFEXITED(status))
++		return WEXITSTATUS(status);
++	if (WIFSIGNALED(status))
++		return 128 + WTERMSIG(status);
++
++	return 1;
++}
++
++static int next_cancel_signal(const sigset_t *cancel_set,
++			      const struct timespec *timeout)
++{
++	int signal;
++
++	for (;;) {
++		signal = sigtimedwait(cancel_set, NULL, timeout);
++		if (signal >= 0)
++			return signal;
++		if (errno == EAGAIN)
++			return 0;
++		if (errno != EINTR) {
++			fprintf(stderr,
++				"hdn-rofs-transaction: signal wait failed: %s\n",
++				strerror(errno));
++			return -errno;
++		}
++	}
++}
++
++static void signal_worker(pid_t child, bool worker_group, int signal)
++{
++	pid_t target = worker_group ? -child : child;
++
++	if (kill(target, signal) && errno != ESRCH)
++		fprintf(stderr,
++			"hdn-rofs-transaction: signal worker failed: %s\n",
++			strerror(errno));
++}
++
++static void reap_worker_group(pid_t child)
 +{
 +	int status;
++
++	for (;;) {
++		pid_t ret;
++
++		/* Each reap can adopt a deeper process-group member. */
++		signal_worker(child, true, SIGKILL);
++		ret = waitpid(-child, &status, 0);
++
++		if (ret > 0)
++			continue;
++		if (ret < 0 && errno == EINTR)
++			continue;
++		if (ret < 0 && errno != ECHILD)
++			fprintf(stderr,
++				"hdn-rofs-transaction: descendant wait failed: %s\n",
++				strerror(errno));
++		return;
++	}
++}
++
++static void cancel_worker(pid_t child, bool worker_group, int signal,
++			  int *status)
++{
++	const struct timespec delay = {
++		.tv_nsec = HDN_CANCEL_POLL_NS,
++	};
++	bool child_exited = false;
++	bool child_waitable = true;
++	unsigned int attempt;
++
++	signal_worker(child, worker_group, signal);
++	for (attempt = 0; attempt < HDN_CANCEL_GRACE_POLLS; attempt++) {
++		siginfo_t info = {};
++		int ret;
++
++		ret = waitid(P_PID, child, &info, WEXITED | WNOHANG | WNOWAIT);
++		if (!ret && info.si_pid == child) {
++			child_exited = true;
++			break;
++		}
++		if (ret && errno != EINTR) {
++			if (errno == ECHILD)
++				child_waitable = false;
++			else
++				fprintf(stderr,
++					"hdn-rofs-transaction: wait failed: %s\n",
++					strerror(errno));
++			break;
++		}
++		nanosleep(&delay, NULL);
++	}
++
++	/*
++	 * Stop descendants in the worker's process group before reaping the
++	 * direct child. Keeping the child waitable pins its PID and prevents a
++	 * reused process-group ID from being signaled here.
++	 */
++	if (worker_group && child_waitable)
++		signal_worker(child, true, SIGKILL);
++	else if (!child_exited && child_waitable)
++		signal_worker(child, false, SIGKILL);
++
++	while (child_waitable) {
++		pid_t ret = waitpid(child, status, 0);
++
++		if (ret == child) {
++			if (worker_group)
++				reap_worker_group(child);
++			return;
++		}
++		if (ret < 0 && errno == ECHILD)
++			return;
++		if (ret < 0 && errno != EINTR) {
++			fprintf(stderr,
++				"hdn-rofs-transaction: wait failed: %s\n",
++				strerror(errno));
++			return;
++		}
++	}
++}
++
++static int finish_worker(pid_t child, bool worker_group, int *status)
++{
++	/*
++	 * A successful direct worker must not be able to leave a background
++	 * writer behind. The waitid(WNOWAIT) caller keeps the direct child (and
++	 * therefore its process-group ID) pinned until the complete group has
++	 * been stopped and the child can be reaped safely.
++	 */
++	if (worker_group)
++		signal_worker(child, true, SIGKILL);
++
++	for (;;) {
++		pid_t ret = waitpid(child, status, 0);
++
++		if (ret == child) {
++			if (worker_group)
++				reap_worker_group(child);
++			return status_code(*status);
++		}
++		if (ret < 0 && errno == EINTR)
++			continue;
++		if (ret < 0)
++			fprintf(stderr,
++				"hdn-rofs-transaction: wait failed: %s\n",
++				strerror(errno));
++		return 1;
++	}
++}
++
++static int run_command(char **argv, const sigset_t *cancel_set,
++		       const sigset_t *old_mask, int *cancel_signal)
++{
++	const struct timespec no_wait = {};
++	const struct timespec poll_delay = {
++		.tv_nsec = HDN_CANCEL_POLL_NS,
++	};
++	bool worker_group = false;
++	int status = 0;
 +	pid_t child;
 +
 +	child = fork();
@@ -95978,32 +96320,77 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	}
 +
 +	if (!child) {
++		if (setpgid(0, 0)) {
++			fprintf(stderr,
++				"hdn-rofs-transaction: worker process group failed: %s\n",
++				strerror(errno));
++			_exit(126);
++		}
++		if (sigprocmask(SIG_SETMASK, old_mask, NULL)) {
++			fprintf(stderr,
++				"hdn-rofs-transaction: worker signal restore failed: %s\n",
++				strerror(errno));
++			_exit(126);
++		}
 +		execv(argv[0], argv);
 +		fprintf(stderr, "hdn-rofs-transaction: exec %s failed: %s\n",
 +			argv[0], strerror(errno));
 +		_exit(127);
 +	}
 +
-+	if (waitpid(child, &status, 0) < 0) {
-+		fprintf(stderr, "hdn-rofs-transaction: wait failed: %s\n",
-+			strerror(errno));
-+		return 1;
++	if (!setpgid(child, child) || getpgid(child) == child)
++		worker_group = true;
++
++	for (;;) {
++		siginfo_t info = {};
++		int signal;
++		int ret;
++
++		signal = next_cancel_signal(cancel_set, &no_wait);
++		if (signal < 0) {
++			cancel_worker(child, worker_group, SIGTERM, &status);
++			return 1;
++		}
++		if (signal > 0) {
++			*cancel_signal = signal;
++			cancel_worker(child, worker_group, signal, &status);
++			return 128 + signal;
++		}
++
++		ret = waitid(P_PID, child, &info, WEXITED | WNOHANG | WNOWAIT);
++		if (!ret && info.si_pid == child)
++			return finish_worker(child, worker_group, &status);
++		if (ret && errno != EINTR) {
++			fprintf(stderr, "hdn-rofs-transaction: wait failed: %s\n",
++				strerror(errno));
++			cancel_worker(child, worker_group, SIGTERM, &status);
++			return 1;
++		}
++
++		signal = next_cancel_signal(cancel_set, &poll_delay);
++		if (signal < 0) {
++			cancel_worker(child, worker_group, SIGTERM, &status);
++			return 1;
++		}
++		if (signal > 0) {
++			*cancel_signal = signal;
++			cancel_worker(child, worker_group, signal, &status);
++			return 128 + signal;
++		}
 +	}
-+
-+	if (WIFEXITED(status))
-+		return WEXITSTATUS(status);
-+	if (WIFSIGNALED(status))
-+		return 128 + WTERMSIG(status);
-+
-+	return 1;
 +}
 +
 +int main(int argc, char **argv)
 +{
 +	const char *mountpoint;
++	const struct timespec no_wait = {};
++	sigset_t cancel_set;
++	sigset_t old_mask;
 +	int command_arg = 2;
 +	int command_status;
++	int cancel_signal = 0;
 +	int seal_ret;
++	int signal;
 +
 +	if (argc < 4) {
 +		usage(argv[0]);
@@ -96026,13 +96413,65 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +		}
 +	}
 +
-+	if (remount_state(mountpoint, false))
++	sigemptyset(&cancel_set);
++	sigaddset(&cancel_set, SIGHUP);
++	sigaddset(&cancel_set, SIGINT);
++	sigaddset(&cancel_set, SIGQUIT);
++	sigaddset(&cancel_set, SIGTERM);
++	if (sigprocmask(SIG_BLOCK, &cancel_set, &old_mask)) {
++		fprintf(stderr,
++			"hdn-rofs-transaction: signal setup failed: %s\n",
++			strerror(errno));
 +		return 1;
++	}
 +
-+	command_status = run_command(&argv[command_arg]);
++	signal = next_cancel_signal(&cancel_set, &no_wait);
++	if (signal) {
++		sigprocmask(SIG_SETMASK, &old_mask, NULL);
++		return signal > 0 ? 128 + signal : 1;
++	}
++	if (prctl(PR_SET_CHILD_SUBREAPER, 1)) {
++		fprintf(stderr,
++			"hdn-rofs-transaction: subreaper setup failed: %s\n",
++			strerror(errno));
++		sigprocmask(SIG_SETMASK, &old_mask, NULL);
++		return 1;
++	}
++
++	if (remount_state(mountpoint, false)) {
++		sigprocmask(SIG_SETMASK, &old_mask, NULL);
++		return 1;
++	}
++
++	signal = next_cancel_signal(&cancel_set, &no_wait);
++	if (signal > 0) {
++		cancel_signal = signal;
++		command_status = 128 + signal;
++	} else if (signal < 0) {
++		command_status = 1;
++	} else {
++		command_status = run_command(&argv[command_arg], &cancel_set,
++					     &old_mask, &cancel_signal);
++	}
++
 +	seal_ret = remount_state(mountpoint, true);
++	for (;;) {
++		signal = next_cancel_signal(&cancel_set, &no_wait);
++		if (signal <= 0)
++			break;
++		if (!cancel_signal)
++			cancel_signal = signal;
++	}
++	if (sigprocmask(SIG_SETMASK, &old_mask, NULL)) {
++		fprintf(stderr,
++			"hdn-rofs-transaction: signal restore failed: %s\n",
++			strerror(errno));
++		return 1;
++	}
 +	if (seal_ret)
 +		return 1;
++	if (cancel_signal)
++		return 128 + cancel_signal;
 +
 +	return command_status;
 +}
@@ -97008,7 +97447,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +		return ret;
 +	}
 +
-+	if (!strstr(status, "available=1")) {
++	if (!status || !strstr(status, "available=1")) {
 +		fprintf(stderr,
 +			"hdn-settings-ui: settings status is not available\n");
 +		free(status);
@@ -112394,7 +112833,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd' '--exclude=.tmp_*' '--exclude=certs/signing_key*' linux-7.0.12/tools/testing/selftests/hardening/hdn_smoke.c linux-7.0.12-hdn/tools/testing/selftests/hardening/hdn_smoke.c
 --- linux-7.0.12/tools/testing/selftests/hardening/hdn_smoke.c	1969-12-31 18:00:00.000000000 -0600
 +++ linux-7.0.12-hdn/tools/testing/selftests/hardening/hdn_smoke.c	2026-07-15 17:51:30.749847195 -0500
-@@ -0,0 +1,32169 @@
+@@ -0,0 +1,32606 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +
 +#define _GNU_SOURCE
@@ -112447,6 +112886,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +#include <sys/inotify.h>
 +#include <sys/socket.h>
 +#include <sys/stat.h>
++#include <sys/statvfs.h>
 +#include <sys/syscall.h>
 +#include <sys/sysmacros.h>
 +#include <sys/un.h>
@@ -113192,6 +113632,8 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +#define HDN_APPROVAL_TOKEN_ISSUER_BAD "/hdn-approvals/bad-issuer.token"
 +#define HDN_PRODUCT_ROFS_DIR "/hdn-product-rofs"
 +#define HDN_PRODUCT_ROFS_SENTINEL "/hdn-product-rofs/sentinel"
++#define HDN_PRODUCT_ROFS_CANCEL_PID "/hdn-rofs-cancel-worker.pid"
++#define HDN_PRODUCT_ROFS_ORPHAN_PID "/hdn-rofs-orphan-worker.pid"
 +#define HDN_PRODUCT_ROFS_BROKER_DIR "/hdn-product-rofs-broker"
 +#define HDN_PRODUCT_ROFS_BROKER_SENTINEL \
 +	"/hdn-product-rofs-broker/sentinel"
@@ -127822,6 +128264,76 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	return 0;
 +}
 +
++static int product_rofs_cancel_worker(const char *pid_path)
++{
++	int fd;
++
++	fd = open(pid_path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
++	if (fd < 0)
++		return 2;
++	if (dprintf(fd, "%ld\n", (long)getpid()) < 0 || fsync(fd)) {
++		close(fd);
++		return 2;
++	}
++	close(fd);
++
++	for (;;)
++		pause();
++}
++
++static int product_rofs_orphan_worker(const char *pid_path)
++{
++	char pid_text[64];
++	int i;
++	pid_t child;
++
++	child = fork();
++	if (child < 0)
++		return 2;
++	if (!child) {
++		pid_t grandchild = fork();
++
++		if (grandchild < 0)
++			return 2;
++		if (!grandchild)
++			return product_rofs_cancel_worker(pid_path);
++		for (;;)
++			pause();
++	}
++
++	for (i = 0; i < 100; i++) {
++		if (!read_text_file_small(pid_path, pid_text, sizeof(pid_text)))
++			return 0;
++		usleep(50000);
++	}
++
++	kill(child, SIGKILL);
++	(void)waitpid(child, NULL, 0);
++	return 2;
++}
++
++static bool process_is_gone_or_zombie(pid_t pid)
++{
++	char path[64];
++	char stat_line[512];
++	char *name_end;
++	FILE *stream;
++
++	snprintf(path, sizeof(path), "/proc/%ld/stat", (long)pid);
++	stream = fopen(path, "r");
++	if (!stream)
++		return errno == ENOENT;
++	if (!fgets(stat_line, sizeof(stat_line), stream)) {
++		fclose(stream);
++		return false;
++	}
++	fclose(stream);
++
++	name_end = strrchr(stat_line, ')');
++	return name_end && name_end[1] == ' ' &&
++	       (name_end[2] == 'Z' || name_end[2] == 'X');
++}
++
 +static unsigned int product_rofs_sentinel_update_count(void)
 +{
 +	unsigned char *buf = NULL;
@@ -127931,6 +128443,190 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +			"post-transaction write-open failed with %s\n",
 +			strerror(saved_errno));
 +	return saved_errno == EROFS ? 0 : 2;
++}
++
++static int product_rofs_transaction_cancel_reseals(void)
++{
++	char pid_text[64];
++	char *end;
++	long parsed_pid = -1;
++	bool worker_dead;
++	int saved_errno;
++	pid_t guardian;
++	pid_t worker;
++	int result;
++	int fd;
++	int i;
++
++	unlink(HDN_PRODUCT_ROFS_CANCEL_PID);
++	guardian = fork();
++	if (guardian < 0)
++		return 2;
++	if (!guardian) {
++		execl(HDN_ROFS_TRANSACTION_EXEC, "hdn-rofs-transaction",
++		      HDN_PRODUCT_ROFS_DIR, "--", "/hdn_smoke",
++		      "--product-rofs-cancel-worker",
++		      HDN_PRODUCT_ROFS_CANCEL_PID, NULL);
++		_exit(2);
++	}
++
++	for (i = 0; i < 100; i++) {
++		if (!read_text_file_small(HDN_PRODUCT_ROFS_CANCEL_PID, pid_text,
++					  sizeof(pid_text))) {
++			errno = 0;
++			parsed_pid = strtol(pid_text, &end, 10);
++			if (!errno && end != pid_text && parsed_pid > 1 &&
++			    parsed_pid <= INT_MAX)
++				break;
++		}
++		usleep(50000);
++	}
++	if (i == 100) {
++		kill(guardian, SIGKILL);
++		(void)child_exit_result(guardian);
++		unlink(HDN_PRODUCT_ROFS_CANCEL_PID);
++		return 2;
++	}
++	worker = (pid_t)parsed_pid;
++
++	if (kill(guardian, SIGTERM)) {
++		kill(guardian, SIGKILL);
++		(void)child_exit_result(guardian);
++		kill(worker, SIGKILL);
++		unlink(HDN_PRODUCT_ROFS_CANCEL_PID);
++		return 2;
++	}
++	result = child_exit_result(guardian);
++
++	errno = 0;
++	worker_dead = kill(worker, 0) && errno == ESRCH;
++	if (!worker_dead)
++		kill(worker, SIGKILL);
++
++	errno = 0;
++	fd = open(HDN_PRODUCT_ROFS_SENTINEL,
++		  O_WRONLY | O_APPEND | O_CLOEXEC);
++	saved_errno = errno;
++	if (fd >= 0)
++		close(fd);
++	unlink(HDN_PRODUCT_ROFS_CANCEL_PID);
++
++	if (result == 128 + SIGTERM && worker_dead && fd < 0 &&
++	    saved_errno == EROFS)
++		return 0;
++
++	fprintf(stderr,
++		"canceled ROFS transaction status=%d worker_dead=%d write_errno=%s\n",
++		result, worker_dead, fd < 0 ? strerror(saved_errno) : "none");
++	if (fd >= 0)
++		(void)product_rofs_apply_seals_mount_readonly();
++	return 1;
++}
++
++static int product_rofs_transaction_stops_background_worker(void)
++{
++	char pid_text[64];
++	char *end;
++	long parsed_pid = -1;
++	bool worker_stopped = false;
++	int saved_errno;
++	pid_t guardian;
++	pid_t worker;
++	int result;
++	int fd;
++	int i;
++
++	unlink(HDN_PRODUCT_ROFS_ORPHAN_PID);
++	guardian = fork();
++	if (guardian < 0)
++		return 2;
++	if (!guardian) {
++		execl(HDN_ROFS_TRANSACTION_EXEC, "hdn-rofs-transaction",
++		      HDN_PRODUCT_ROFS_DIR, "--", "/hdn_smoke",
++		      "--product-rofs-orphan-worker",
++		      HDN_PRODUCT_ROFS_ORPHAN_PID, NULL);
++		_exit(2);
++	}
++
++	result = child_exit_result(guardian);
++	if (!read_text_file_small(HDN_PRODUCT_ROFS_ORPHAN_PID, pid_text,
++				  sizeof(pid_text))) {
++		errno = 0;
++		parsed_pid = strtol(pid_text, &end, 10);
++		if (errno || end == pid_text || parsed_pid <= 1 ||
++		    parsed_pid > INT_MAX)
++			parsed_pid = -1;
++	}
++	worker = (pid_t)parsed_pid;
++	if (parsed_pid > 1) {
++		for (i = 0; i < 100; i++) {
++			if (process_is_gone_or_zombie(worker)) {
++				worker_stopped = true;
++				break;
++			}
++			usleep(50000);
++		}
++		if (!worker_stopped)
++			kill(worker, SIGKILL);
++	}
++
++	errno = 0;
++	fd = open(HDN_PRODUCT_ROFS_SENTINEL,
++		  O_WRONLY | O_APPEND | O_CLOEXEC);
++	saved_errno = errno;
++	if (fd >= 0)
++		close(fd);
++	unlink(HDN_PRODUCT_ROFS_ORPHAN_PID);
++
++	if (!result && worker_stopped && fd < 0 && saved_errno == EROFS)
++		return 0;
++
++	fprintf(stderr,
++		"completed ROFS transaction status=%d worker_stopped=%d write_errno=%s\n",
++		result, worker_stopped, fd < 0 ? strerror(saved_errno) : "none");
++	if (fd >= 0)
++		(void)product_rofs_apply_seals_mount_readonly();
++	return 1;
++}
++
++static int product_rofs_transaction_preserves_mount_restrictions(void)
++{
++	const unsigned long restrictions = MS_NOSUID | MS_NODEV | MS_NOEXEC;
++	struct statvfs state;
++	pid_t child;
++	int ret;
++
++	/* Force the helper through its legacy superblock remount fallback. */
++	if (mount(NULL, HDN_PRODUCT_ROFS_DIR, NULL,
++		  MS_REMOUNT | MS_RDONLY | restrictions, NULL)) {
++		fprintf(stderr, "restricted ROFS remount failed: %s\n",
++			strerror(errno));
++		return 2;
++	}
++
++	child = fork();
++	if (child < 0)
++		return 2;
++	if (!child) {
++		execl(HDN_ROFS_TRANSACTION_EXEC, "hdn-rofs-transaction",
++		      HDN_PRODUCT_ROFS_DIR, "--", "/hdn_smoke",
++		      "--product-rofs-noop-worker", NULL);
++		_exit(2);
++	}
++	ret = child_exit_result(child);
++	if (ret)
++		return ret;
++	if (statvfs(HDN_PRODUCT_ROFS_DIR, &state))
++		return 2;
++	if (!(state.f_flag & ST_RDONLY) || !(state.f_flag & ST_NOSUID) ||
++	    !(state.f_flag & ST_NODEV) || !(state.f_flag & ST_NOEXEC)) {
++		fprintf(stderr,
++			"ROFS transaction dropped mount restrictions: flags=%#lx\n",
++			(unsigned long)state.f_flag);
++		return 1;
++	}
++
++	return 0;
 +}
 +
 +static int product_rofs_broker_denied(const char *broker_path,
@@ -132133,6 +132829,10 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 +	if (addr == MAP_FAILED)
 +		return 2;
++	if (mprotect(addr, page_size, PROT_READ)) {
++		munmap(addr, page_size);
++		return 2;
++	}
 +
 +	errno = 0;
 +	ret = mprotect(addr, page_size, PROT_READ | PROT_EXEC);
@@ -136023,6 +136723,9 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	int image_seal_unsafe_config_result = 2;
 +	int image_seal_result = 2;
 +	int product_rofs_transaction_result = 2;
++	int product_rofs_transaction_cancel_result = 2;
++	int product_rofs_transaction_orphan_result = 2;
++	int product_rofs_transaction_restrictions_result = 2;
 +	int product_rofs_broker_missing_config_result = 2;
 +	int product_rofs_broker_unsafe_config_result = 2;
 +	int product_rofs_broker_denial_result = 2;
@@ -136470,6 +137173,8 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +		ksft_test_result_skip("image seal denies unsafe config\n");
 +		ksft_test_result_skip("image seal applies read-only mount list\n");
 +		ksft_test_result_skip("product ROFS transaction updates and reseals mount\n");
++		ksft_test_result_skip("canceled ROFS transaction stops worker and reseals mount\n");
++		ksft_test_result_skip("ROFS transaction stops background worker before reseal\n");
 +		ksft_test_result_skip("admin broker denies missing allowlist\n");
 +		ksft_test_result_skip("admin broker denies writable allowlist\n");
 +		ksft_test_result_skip("admin broker denies unapproved ROFS worker\n");
@@ -138171,6 +138876,38 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +			     product_rofs_apply_result :
 +			     product_rofs_transaction_result) : 2,
 +			    "product ROFS transaction updates and reseals mount");
++	if (mount_ro_policy_committed && !product_rofs_apply_result &&
++	    !product_rofs_transaction_result)
++		product_rofs_transaction_cancel_result =
++			product_rofs_transaction_cancel_reseals();
++	report_child_result(mount_ro_policy_committed ?
++			    (product_rofs_apply_result ?
++			     product_rofs_apply_result :
++			     (product_rofs_transaction_result ? KSFT_SKIP :
++			      product_rofs_transaction_cancel_result)) : 2,
++			    "canceled ROFS transaction stops worker and reseals mount");
++	if (mount_ro_policy_committed && !product_rofs_apply_result &&
++	    !product_rofs_transaction_result)
++		product_rofs_transaction_orphan_result =
++			product_rofs_transaction_stops_background_worker();
++	report_child_result(mount_ro_policy_committed ?
++			    (product_rofs_apply_result ?
++			     product_rofs_apply_result :
++			     (product_rofs_transaction_result ? KSFT_SKIP :
++			      product_rofs_transaction_orphan_result)) : 2,
++			    "ROFS transaction stops background worker before reseal");
++	if (mount_ro_policy_committed && !product_rofs_apply_result &&
++	    !product_rofs_transaction_result &&
++	    !product_rofs_transaction_orphan_result)
++		product_rofs_transaction_restrictions_result =
++			product_rofs_transaction_preserves_mount_restrictions();
++	report_child_result(mount_ro_policy_committed ?
++			    (product_rofs_apply_result ?
++			     product_rofs_apply_result :
++			     ((product_rofs_transaction_result ||
++			       product_rofs_transaction_orphan_result) ? KSFT_SKIP :
++			      product_rofs_transaction_restrictions_result)) : 2,
++			    "ROFS transaction preserves mount restrictions");
 +	if (mount_ro_policy_committed && !product_rofs_apply_result &&
 +	    !product_rofs_transaction_result)
 +		product_rofs_broker_missing_config_result =
@@ -142477,6 +143214,135 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +			 "mprotect exec-after-write is denied\n");
 +}
 +
++static void test_exec_after_write_history_denied(void)
++{
++	size_t page_size = sysconf(_SC_PAGESIZE);
++	void *addr;
++	int ret;
++	int saved_errno = 0;
++
++	addr = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
++		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++	if (addr == MAP_FAILED || mprotect(addr, page_size, PROT_READ)) {
++		ksft_test_result_fail("write-history mmap setup failed: %s\n",
++				      strerror(errno));
++		if (addr != MAP_FAILED)
++			munmap(addr, page_size);
++		return;
++	}
++
++	errno = 0;
++	ret = mprotect(addr, page_size, PROT_READ | PROT_EXEC);
++	if (ret)
++		saved_errno = errno;
++
++	munmap(addr, page_size);
++	ksft_test_result(ret && errno_is_denial(saved_errno),
++			 "mprotect preserves exec-after-write history\n");
++}
++
++static void test_exec_after_write_split_history_denied(void)
++{
++	size_t page_size = sysconf(_SC_PAGESIZE);
++	void *middle;
++	void *addr;
++	int ret;
++	int saved_errno = 0;
++
++	addr = mmap(NULL, page_size * 3, PROT_READ | PROT_WRITE,
++		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++	if (addr == MAP_FAILED) {
++		ksft_test_result_fail("write-history split mmap failed: %s\n",
++				      strerror(errno));
++		return;
++	}
++	middle = (char *)addr + page_size;
++	if (mprotect(middle, page_size, PROT_READ)) {
++		ksft_test_result_fail("write-history VMA split failed: %s\n",
++				      strerror(errno));
++		munmap(addr, page_size * 3);
++		return;
++	}
++
++	errno = 0;
++	ret = mprotect(middle, page_size, PROT_READ | PROT_EXEC);
++	if (ret)
++		saved_errno = errno;
++
++	munmap(addr, page_size * 3);
++	ksft_test_result(ret && errno_is_denial(saved_errno),
++			 "VMA splits preserve exec-after-write history\n");
++}
++
++static void test_exec_after_write_merge_history_denied(void)
++{
++	size_t page_size = sysconf(_SC_PAGESIZE);
++	void *middle;
++	void *addr;
++	int ret;
++	int saved_errno = 0;
++
++	addr = mmap(NULL, page_size * 3, PROT_READ,
++		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++	if (addr == MAP_FAILED) {
++		ksft_test_result_fail("write-history merge mmap failed: %s\n",
++				      strerror(errno));
++		return;
++	}
++	middle = (char *)addr + page_size;
++	if (mprotect(middle, page_size, PROT_READ | PROT_WRITE) ||
++	    mprotect(addr, page_size * 3, PROT_READ)) {
++		ksft_test_result_fail("write-history VMA merge setup failed: %s\n",
++				      strerror(errno));
++		munmap(addr, page_size * 3);
++		return;
++	}
++
++	errno = 0;
++	ret = mprotect(addr, page_size, PROT_READ | PROT_EXEC);
++	if (ret)
++		saved_errno = errno;
++
++	munmap(addr, page_size * 3);
++	ksft_test_result(ret && errno_is_denial(saved_errno),
++			 "VMA merges preserve exec-after-write history\n");
++}
++
++static void test_exec_after_write_fork_history_denied(void)
++{
++	size_t page_size = sysconf(_SC_PAGESIZE);
++	void *addr;
++	pid_t child;
++	int ret;
++
++	addr = mmap(NULL, page_size, PROT_READ | PROT_WRITE,
++		    MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++	if (addr == MAP_FAILED || mprotect(addr, page_size, PROT_READ)) {
++		ksft_test_result_fail("write-history fork mmap setup failed: %s\n",
++				      strerror(errno));
++		if (addr != MAP_FAILED)
++			munmap(addr, page_size);
++		return;
++	}
++
++	child = fork();
++	if (child < 0) {
++		ksft_test_result_fail("write-history fork failed: %s\n",
++				      strerror(errno));
++		munmap(addr, page_size);
++		return;
++	}
++	if (!child) {
++		errno = 0;
++		ret = mprotect(addr, page_size, PROT_READ | PROT_EXEC);
++		_exit(ret && errno_is_denial(errno) ? 0 : 1);
++	}
++
++	ret = child_exit_result(child);
++	munmap(addr, page_size);
++	ksft_test_result(!ret, "fork preserves exec-after-write history\n");
++}
++
 +static void test_rwx_mprotect_audit_logged(void)
 +{
 +	unsigned int before;
@@ -144085,6 +144951,12 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +		return rofs_updater_writable_mount_sentinel();
 +	if (argc == 2 && !strcmp(argv[1], "--product-rofs-write-sentinel"))
 +		return product_rofs_write_sentinel();
++	if (argc == 3 && !strcmp(argv[1], "--product-rofs-cancel-worker"))
++		return product_rofs_cancel_worker(argv[2]);
++	if (argc == 3 && !strcmp(argv[1], "--product-rofs-orphan-worker"))
++		return product_rofs_orphan_worker(argv[2]);
++	if (argc == 2 && !strcmp(argv[1], "--product-rofs-noop-worker"))
++		return 0;
 +	if (argc == 3 && !strcmp(argv[1], "--recovery-confirm-allow"))
 +		return recovery_confirm_sentinel(argv[2], true);
 +	if (argc == 3 && !strcmp(argv[1], "--recovery-confirm-deny"))
@@ -144111,7 +144983,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	if (access(HDN_STATUS, R_OK))
 +		ksft_exit_skip("hardening securityfs status not present\n");
 +
-+	ksft_set_plan(1111);
++	ksft_set_plan(1118);
 +	report_child_result(prompt_session_unprivileged_authorized_denied(),
 +			    "prompt session rejects unprivileged authorized bypass");
 +	test_securityfs_status();
@@ -144471,6 +145343,10 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +	test_audit_flood_control();
 +	test_file_backed_rwx_denied();
 +	test_exec_after_write_denied();
++	test_exec_after_write_history_denied();
++	test_exec_after_write_split_history_denied();
++	test_exec_after_write_merge_history_denied();
++	test_exec_after_write_fork_history_denied();
 +	report_child_result(elf_note_jit_exec_after_write_allowed(),
 +			    "ELF memory note allows private anonymous exec-after-write");
 +	report_child_result(elf_note_exec_stack_elf_allowed(),
@@ -146003,7 +146879,7 @@ diff -ruN '--exclude=.git' '--exclude=.config' '--exclude=*.o' '--exclude=*.cmd'
 +QEMU_MEMORY=${QEMU_MEMORY:-1024M}
 +QEMU_SMP=${QEMU_SMP:-2}
 +QEMU_MACHINE=${QEMU_MACHINE:-q35,accel=tcg}
-+HDN_SMOKE_EXPECTED_PASS=${HDN_SMOKE_EXPECTED_PASS:-1111}
++HDN_SMOKE_EXPECTED_PASS=${HDN_SMOKE_EXPECTED_PASS:-1118}
 +WORK=${HDN_QEMU_WORK:-"${TMPDIR:-/tmp}/hdn-qemu-smoke.$$"}
 +LOG=${HDN_QEMU_LOG:-"$WORK/qemu.log"}
 +QMP=${HDN_QEMU_QMP:-"$WORK/qmp.sock"}
