@@ -64,10 +64,10 @@ production configuration.
 
 The optional RAP/private-stack profile requires GCC 16 and its complete
 compiler/binary verification workflow. It passed isolated compiler coverage
-and four-vCPU KVM runtime qualification on all three listed source families,
-but remains default-off in the ordinary profile. That evidence does not
-replace native package, Secure Boot, physical-hardware, workload, or deployment
-acceptance.
+and four-vCPU KVM runtime qualification on all three listed vendor source
+families and on generic Linux 7.0.12, but remains default-off in the ordinary
+profile. That evidence does not replace native package, Secure Boot,
+physical-hardware, workload, or deployment acceptance.
 
 The ordinary HDN profile for all three vendor patches compiled with
 `CONFIG_WERROR=y`, forced module signatures, strict kernel/module RWX, HDN
@@ -81,21 +81,27 @@ and passed all 1,118 recorded HDN runtime checks with a clean kernel-fault scan.
 | Upstream version | Linux 7.0.12 |
 | Upstream stable commit | `f53879e2e1e2fa053040e734c1ef8f386109a61b` |
 | Upstream archive SHA-256 | `57edc9a41efc1ca6b797afa8f4a587a30da2af6bca7356eb56e1e1a4ada265da` |
-| HDN source commit | `c2f47ae442eb8669acd93cc9d6e5f606a10a1b35` |
+| HDN source commit | `159983aa8b7cc5c47d15c735153ac5805679a5d0` |
 | Patch | `hdn-linux-7.0.12.patch` |
-| Patch SHA-256 | `311b4f013a5979d8e37f285a58f99d5edb2eb07d7e98a4de30b7dbc9efccbf5f` |
-| Patch size | 4,896,236 bytes; 148,739 lines |
+| Patch SHA-256 | `7638eb3c1c556841c7987af631b7f0ad94ad31786579e0cecec1faf681ed09ab` |
+| Patch size | 5,182,984 bytes; 157,247 lines |
 
 The source commit is public at:
 
-https://github.com/Corvidae-Coding-Projects/hdn-kernel/commit/c2f47ae442eb8669acd93cc9d6e5f606a10a1b35
+https://github.com/Corvidae-Coding-Projects/hdn-kernel/commit/159983aa8b7cc5c47d15c735153ac5805679a5d0
 
 This checkpoint is newer than the separately qualified HDN release-30 kernel
 package and OS image. Their test results must not be treated as qualification
-of this newer patch. Its fresh x86 KVM run passed all 1,118 hardening smoke
-checks, and the affected tools passed focused compilation and static analysis.
-Broader hardware, sanitizer, adversarial, performance, and final acceptance
-work remains separate.
+of this newer patch. Its exact successor source passed a fresh complete GCC 16
+compiler/binary inventory for 3,310 expected units, an ordinary default-off
+regression build, and a four-vCPU KVM boot with RAP/private stacks active,
+signed probe modules, and KVM VM creation. The broader 1,118-test smoke,
+analyzer, sanitizer, cross-architecture, fuzz, performance, physical-hardware,
+and final acceptance records remain bound to predecessors or separate work.
+
+The retained successor evidence is published with the development handoff at:
+
+https://github.com/Corvidae-Coding-Projects/hdn-linux/tree/e8b0d8a42ba243657ccc6a471f568fe33c5df118/verification/evidence/rap-private-stack-7.0.12
 
 ## Obtain and verify Linux 7.0.12
 
