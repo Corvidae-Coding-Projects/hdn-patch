@@ -1,1 +1,4 @@
 311b4f013a5979d8e37f285a58f99d5edb2eb07d7e98a4de30b7dbc9efccbf5f  hdn-linux-7.0.12.patch
+bdf7012198949702e02e97a8dfa43ec2cd5848113bfc9795de23faaf21d9f576  hdn-linux-7.0.14-ubuntu-24.04-hwe-gitlab.patch
+cad040388cf3a95fb0275c014912fd16de50615abb349aaee0685d18ba04867b  hdn-linux-7.0.14-ubuntu-26.04.patch
+ff5311bddf94afe4d6eb88ddf214a5e4ec3aa7f2b2c8e1de001fcfbc36b28bf3  hdn-linux-7.3.1-debian-wazuh.patch

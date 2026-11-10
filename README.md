@@ -1,14 +1,80 @@
 # HDN Linux kernel patch
 
-This repository publishes the HDN Linux kernel-hardening patch for a clean
-upstream Linux 7.0.12 source tree. It is the public release artifact; kernel
-development happens elsewhere.
+This repository publishes HDN Linux kernel-hardening patches for the generic
+upstream Linux 7.0.12 source tree and three qualified vendor source families.
+It is the public release-artifact repository; kernel development happens
+elsewhere.
 
 HDN is an independent implementation with its own policy model, interfaces,
 tests, and source structure. It is not source-, configuration-, or
 ABI-compatible with grsecurity or PaX.
 
-## Release identity
+## Vendor-specific patches
+
+These patches include the current HDN source, the persistent exec-after-write
+history fix, guarded read-only-filesystem transaction cancellation, native
+vendor adaptations, and the qualified optional RAP/private-stack work.
+
+| Exact target source | Patch | SHA-256 |
+| --- | --- | --- |
+| Ubuntu 26.04, Linux 7.0.14 | `hdn-linux-7.0.14-ubuntu-26.04.patch` | `cad040388cf3a95fb0275c014912fd16de50615abb349aaee0685d18ba04867b` |
+| Ubuntu 24.04 HWE, Linux 7.0.14, GitLab variant | `hdn-linux-7.0.14-ubuntu-24.04-hwe-gitlab.patch` | `bdf7012198949702e02e97a8dfa43ec2cd5848113bfc9795de23faaf21d9f576` |
+| Debian, Linux 7.3.1, Wazuh variant | `hdn-linux-7.3.1-debian-wazuh.patch` | `ff5311bddf94afe4d6eb88ddf214a5e4ec3aa7f2b2c8e1de001fcfbc36b28bf3` |
+
+The patches are not interchangeable. Use only the patch matching the exact
+vendor family and version. Do not force rejected or offset hunks onto a
+different revision.
+
+From the root of an unmodified matching source tree, verify the repository and
+preflight the selected patch:
+
+```sh
+sha256sum -c /path/to/hdn-patch/SHA256SUMS
+
+git apply --check --whitespace=nowarn \
+  /path/to/hdn-patch/the-matching-vendor.patch
+git apply --whitespace=nowarn \
+  /path/to/hdn-patch/the-matching-vendor.patch
+```
+
+`--whitespace=nowarn` preserves inherited vendor/upstream whitespace; it does
+not permit fuzzy or rejected hunks. Each published patch was independently
+replayed against a fresh copy of its pinned baseline, and the result matched
+the qualified source tree byte-for-byte, including file modes and symlinks.
+
+### Configure a vendor kernel
+
+Begin with the vendor's configuration for that exact kernel. Enable
+`CONFIG_SECURITY_HARDENING=y`, resolve new symbols, and compare the result with
+the original vendor configuration:
+
+```sh
+cp /path/to/vendor.config .config
+make olddefconfig
+scripts/config --file .config -e SECURITY -e SECURITY_HARDENING
+make olddefconfig
+scripts/diffconfig /path/to/vendor.config .config
+```
+
+Do not weaken KASLR, strong stack protection, strict kernel/module RWX, module
+signature enforcement, memory initialization, FORTIFY, hardened usercopy,
+AppArmor, BPF restrictions, or perf restrictions merely to obtain a build.
+Leave options ending in `_TEST`, `_FIXTURE`, or `_BAD_FIXTURE` disabled in a
+production configuration.
+
+The optional RAP/private-stack profile requires GCC 16 and its complete
+compiler/binary verification workflow. It passed isolated compiler coverage
+and four-vCPU KVM runtime qualification on all three listed source families,
+but remains default-off in the ordinary profile. That evidence does not
+replace native package, Secure Boot, physical-hardware, workload, or deployment
+acceptance.
+
+The ordinary HDN profile for all three vendor patches compiled with
+`CONFIG_WERROR=y`, forced module signatures, strict kernel/module RWX, HDN
+user-WX, and HDN ROFS. Each resulting image booted in an isolated q35 KVM guest
+and passed all 1,118 recorded HDN runtime checks with a clean kernel-fault scan.
+
+## Generic upstream 7.0.12 release identity
 
 | Item | Value |
 | --- | --- |
@@ -141,8 +207,8 @@ Important configuration boundaries:
 - `CONFIG_SECURITY_HARDENING_RAP`, RESPECTRE, private stacks, page-table
   ownership, KERNSEAL, and related advanced options must not be enabled merely
   to make the configuration look more complete. Read their Kconfig help and
-  satisfy their compiler and verification requirements first. RAP currently
-  requires its GCC 16 producer ABI and a source/config/compiler build identity.
+  satisfy their compiler and verification requirements first. RAP requires
+  its GCC 16 producer ABI and a source/config/compiler build identity.
 - When modules are enabled, the HDN master option forces module-signature
   enforcement. Arrange a trusted signing key and sign any required external or
   DKMS modules. The applied tree documents this in
